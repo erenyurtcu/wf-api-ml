@@ -100,7 +100,7 @@ def upload_excel():
 
             ann_model.compile(loss='sparse_categorical_crossentropy', optimizer=Adam(learning_rate=0.001), metrics=['accuracy'])
 
-            ann_model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test))
+            ann_model.fit(X_train, y_train, epochs=20, batch_size=64, validation_data=(X_test, y_test))
 
         else:
             return jsonify({"error": "Invalid method selected."}), 400
