@@ -1,7 +1,9 @@
 import os
+import time
 from flask import Flask, request, jsonify, send_file
 import pandas as pd
 import re
+import difflib
 from collections import defaultdict
 from openpyxl import load_workbook
 from sklearn.feature_extraction.text import CountVectorizer
@@ -25,7 +27,7 @@ def clean_text(text):
     return text.strip().lower()
 
 def extract_root(word):
-    root = re.sub(r'(lu|lü|lı|li|sız|siz|de|da|ye|ya|e|a|den|dan|la|le|te|ti|ta|u|i|ı|un|ın|in|ün|siz|sız|suz|süz)$', '', word)
+    root = re.sub(r'(lu|lü|lı|li|sız|siz|de|da|ye|ya|e  |den|dan|la|le|te|ti|ta|u|i|ı|un|in|ün|siz|sız|suz|süz)$', '', word)
     return root
 
 def is_valid_prediction(prediction, original_word):
@@ -78,7 +80,7 @@ def upload_excel():
 
         label_encoder = LabelEncoder()
         y = label_encoder.fit_transform(df_train['root'])
-
+        start_time = time.time()
         if method == "xgboost":
             model = XGBClassifier(eval_metric='mlogloss')
             model.fit(X, y)  # XGBoost modelini eğit
@@ -105,6 +107,10 @@ def upload_excel():
         else:
             return jsonify({"error": "Invalid method selected."}), 400
 
+        def is_similar(predicted_root, original_word, threshold=0.6):
+            similarity_ratio = difflib.SequenceMatcher(None, predicted_root, original_word).ratio()
+            return similarity_ratio >= threshold
+
         def predict_root(text):
             cleaned_text = clean_text(text)
             words = cleaned_text.split()
@@ -113,18 +119,25 @@ def upload_excel():
                 if word:
                     if method == "svm":
                         prediction = model.predict(vectorizer.transform([word]).toarray())
-                        roots.append(prediction[0])
+                        predicted_root = prediction[0]
                     elif method == "ann":
                         prediction = ann_model.predict(vectorizer.transform([word]).toarray())
                         predicted_index = prediction.argmax(axis=1)[0]
-                        roots.append(label_encoder.inverse_transform([predicted_index])[0])
+                        predicted_root = label_encoder.inverse_transform([predicted_index])[0]
                     else:
                         prediction = model.predict(vectorizer.transform([word]))[0]
-                        prediction_text = label_encoder.inverse_transform([prediction])[0]
-                        if is_valid_prediction(prediction_text, word):
-                            roots.append(prediction_text)
+                        predicted_root = label_encoder.inverse_transform([prediction])[0]
+
+                    # Tahmin edilen kökün geçerli olup olmadığını kontrol et
+                    if is_valid_prediction(predicted_root, word) and is_similar(predicted_root, word):
+                        roots.append(predicted_root)
+                    else:
+                        # Eğer tahmin edilen kök geçerli değilse, orijinal kelimeyi kök olarak kabul et
+                        roots.append(word)
             return roots
 
+        end_time = time.time()
+        function_time = end_time - start_time
         word_row_dict = defaultdict(list)
         word_frequency = defaultdict(int)
 
@@ -142,7 +155,9 @@ def upload_excel():
                 f.write(f"{word}: used in row(s) {', '.join(map(str, rows))}.\n")
 
         if os.path.exists(output_file):
-            return send_file(output_file, as_attachment=True)
+            response = send_file(output_file, as_attachment=True)
+            response.headers["X-Processing-Time"] = function_time
+            return response
         else:
             return jsonify({"error": f"File {output_file} not found."}), 500
 
